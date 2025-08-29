@@ -1,0 +1,11 @@
+django
+djangorestframework
+djangorestframework-simplejwt
+psycopg2-binary
+python-dotenv
+django-environ
+redis
+django-redis
+drf-spectacular
+django-cors-headers
+gunicorn
