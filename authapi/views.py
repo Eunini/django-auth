@@ -1,3 +1,8 @@
+"""
+Views for authentication endpoints using Django REST Framework.
+Handles registration, login, user info, password reset, and integrates with Redis for token storage.
+"""
+
 import secrets
 import redis
 from django.conf import settings
@@ -16,10 +21,16 @@ from .serializers import (
     ResetPasswordSerializer, UserSerializer
 )
 
+# Get the custom user model
 User = get_user_model()
+
+# Create a Redis connection using Django settings
 r = redis.from_url(settings.CACHES["default"]["LOCATION"])
 
 class RegisterView(generics.CreateAPIView):
+    """
+    API endpoint for user registration.
+    """
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
     throttle_scope = "login"
@@ -33,9 +44,15 @@ class RegisterView(generics.CreateAPIView):
         )]
     )
     def post(self, request, *args, **kwargs):
+        """
+        Handle POST request for user registration.
+        """
         return super().post(request, *args, **kwargs)
 
 class LoginView(APIView):
+    """
+    API endpoint for user login. Returns JWT access and refresh tokens.
+    """
     permission_classes = [permissions.AllowAny]
     throttle_scope = "login"
 
@@ -51,6 +68,10 @@ class LoginView(APIView):
         )]
     )
     def post(self, request):
+        """
+        Handle POST request for user login.
+        Authenticates the user and returns JWT tokens if credentials are valid.
+        """
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = authenticate(
@@ -65,6 +86,9 @@ class LoginView(APIView):
         })
 
 class MeView(APIView):
+    """
+    API endpoint to get details of the authenticated user.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     @extend_schema(
@@ -72,10 +96,17 @@ class MeView(APIView):
         description="Get authenticated user details."
     )
     def get(self, request):
+        """
+        Handle GET request to return the authenticated user's details.
+        """
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
 
 class ForgotPasswordView(APIView):
+    """
+    API endpoint to initiate password reset.
+    Generates a reset token, stores it in Redis, and (in production) would email it to the user.
+    """
     permission_classes = [permissions.AllowAny]
     throttle_scope = "password_reset"
 
@@ -87,20 +118,28 @@ class ForgotPasswordView(APIView):
         )}
     )
     def post(self, request):
+        """
+        Handle POST request to initiate password reset.
+        """
         serializer = ForgotPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data["email"]
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
+            # Always return success to avoid leaking which emails are registered
             return Response({"detail": "Password reset email sent if user exists."}, status=200)
         token = str(uuid.uuid4())
         redis_conn = get_redis_connection("default")
+        # Store the reset token in Redis with a 10-minute expiry
         redis_conn.set(f"reset:{token}", user.pk, ex=600)
-        # Here you would send the token via email in production
+        # In production, send the token via email here
         return Response({"detail": "Password reset email sent if user exists.", "reset_token": token})
 
 class ResetPasswordView(APIView):
+    """
+    API endpoint to reset the user's password using a token.
+    """
     permission_classes = [permissions.AllowAny]
     throttle_scope = "password_reset"
 
@@ -112,6 +151,10 @@ class ResetPasswordView(APIView):
         )}
     )
     def post(self, request):
+        """
+        Handle POST request to reset the user's password.
+        Validates the token from Redis and updates the user's password.
+        """
         serializer = ResetPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         token = serializer.validated_data["token"]
