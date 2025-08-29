@@ -1,33 +1,60 @@
-from django.contrib.auth import get_user_model
+from django.urls import reverse
 from rest_framework.test import APITestCase
-
-User = get_user_model()
+from accounts.models import User
+from rest_framework import status
 
 class AuthFlowTests(APITestCase):
     def setUp(self):
-        self.email = "test@example.com"
-        self.password = "StrongPass123!"
-        self.full_name = "Test User"
+        self.user = User.objects.create_user(
+            email="test@example.com", full_name="Test User", password="testpass123"
+        )
 
-    def test_register_login_me(self):
-        r = self.client.post("/api/auth/register", {
-            "full_name": self.full_name, "email": self.email, "password": self.password
-        })
-        self.assertEqual(r.status_code, 201)
+    def test_register(self):
+        url = reverse("register")
+        data = {"email": "new@example.com", "full_name": "New User", "password": "newpass123"}
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("email", response.data)
 
-        r = self.client.post("/api/auth/login", {"email": self.email, "password": self.password})
-        self.assertEqual(r.status_code, 200)
-        access = r.data["access"]
+    def test_login(self):
+        url = reverse("login")
+        data = {"email": "test@example.com", "password": "testpass123"}
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.access = response.data["access"]
 
-        r = self.client.get("/api/auth/me", HTTP_AUTHORIZATION=f"Bearer {access}")
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.data["email"], self.email)
+    def test_me(self):
+        self.test_login()
+        url = reverse("me")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.access}")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["email"], "test@example.com")
 
-    def test_forgot_and_reset(self):
-        User.objects.create_user(email=self.email, full_name=self.full_name, password=self.password)
-        r = self.client.post("/api/auth/forgot-password", {"email": self.email})
-        self.assertEqual(r.status_code, 200)
-        token = r.data["reset_token"]
+    def test_forgot_password(self):
+        url = reverse("forgot-password")
+        data = {"email": "test@example.com"}
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("detail", response.data)
+        self.assertIn("reset_token", response.data)
 
-        r = self.client.post("/api/auth/reset-password", {"token": token, "new_password": "NewPass123!"})
-        self.assertEqual(r.status_code, 200)
+    def test_reset_password(self):
+        # Get reset token
+        url = reverse("forgot-password")
+        data = {"email": "test@example.com"}
+        response = self.client.post(url, data)
+        token = response.data.get("reset_token")
+        # Reset password
+        url = reverse("reset-password")
+        data = {"token": token, "password": "resetpass123"}
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("detail", response.data)
+        # Login with new password
+        url = reverse("login")
+        data = {"email": "test@example.com", "password": "resetpass123"}
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)

@@ -1,70 +1,130 @@
 import secrets
 import redis
 from django.conf import settings
-from django.contrib.auth import get_user_model
-from rest_framework import status, permissions
+from django.contrib.auth import get_user_model, authenticate
+from rest_framework import generics, status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
-from rest_framework.permissions import IsAuthenticated
-from .serializers import RegisterSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
+from django_redis import get_redis_connection
+from drf_spectacular.utils import extend_schema, OpenApiExample
+import uuid
+
+from .serializers import (
+    RegisterSerializer, LoginSerializer, ForgotPasswordSerializer,
+    ResetPasswordSerializer, UserSerializer
+)
 
 User = get_user_model()
 r = redis.from_url(settings.CACHES["default"]["LOCATION"])
 
-class RegisterView(APIView):
+class RegisterView(generics.CreateAPIView):
+    serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
     throttle_scope = "login"
 
-    def post(self, request):
-        s = RegisterSerializer(data=request.data)
-        s.is_valid(raise_exception=True)
-        s.save()
-        return Response({"message": "registered"}, status=status.HTTP_201_CREATED)
+    @extend_schema(
+        request=RegisterSerializer,
+        responses={201: UserSerializer},
+        examples=[OpenApiExample(
+            "Register Example",
+            value={"email": "user@example.com", "full_name": "John Doe", "password": "strongpassword123"}
+        )]
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
 
-class LoginView(TokenObtainPairView):
+class LoginView(APIView):
+    permission_classes = [permissions.AllowAny]
     throttle_scope = "login"
 
-class MeView(APIView):
-    permission_classes = [IsAuthenticated]
+    @extend_schema(
+        request=LoginSerializer,
+        responses={200: OpenApiExample(
+            "JWT Token Example",
+            value={"access": "jwt-access-token", "refresh": "jwt-refresh-token"}
+        )},
+        examples=[OpenApiExample(
+            "Login Example",
+            value={"email": "user@example.com", "password": "strongpassword123"}
+        )]
+    )
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = authenticate(
+            request, email=serializer.validated_data["email"], password=serializer.validated_data["password"]
+        )
+        if not user:
+            return Response({"detail": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED)
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            "access": str(refresh.access_token),
+            "refresh": str(refresh)
+        })
 
+class MeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(
+        responses={200: UserSerializer},
+        description="Get authenticated user details."
+    )
     def get(self, request):
-        u = request.user
-        return Response({"email": u.email, "full_name": u.full_name})
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data)
 
 class ForgotPasswordView(APIView):
     permission_classes = [permissions.AllowAny]
     throttle_scope = "password_reset"
 
+    @extend_schema(
+        request=ForgotPasswordSerializer,
+        responses={200: OpenApiExample(
+            "Forgot Password Example",
+            value={"detail": "Password reset email sent if user exists."}
+        )}
+    )
     def post(self, request):
-        email = request.data.get("email")
-        if not email:
-            return Response({"detail": "email required"}, status=400)
+        serializer = ForgotPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
-            return Response({"message": "if account exists, reset token generated"})
-        token = secrets.token_urlsafe(32)
-        r.setex(f"pwdreset:{token}", 600, str(user.id))
-        return Response({"reset_token": token, "expires_in": 600})
+            return Response({"detail": "Password reset email sent if user exists."}, status=200)
+        token = str(uuid.uuid4())
+        redis_conn = get_redis_connection("default")
+        redis_conn.set(f"reset:{token}", user.pk, ex=600)
+        # Here you would send the token via email in production
+        return Response({"detail": "Password reset email sent if user exists.", "reset_token": token})
 
 class ResetPasswordView(APIView):
     permission_classes = [permissions.AllowAny]
     throttle_scope = "password_reset"
 
+    @extend_schema(
+        request=ResetPasswordSerializer,
+        responses={200: OpenApiExample(
+            "Reset Password Example",
+            value={"detail": "Password has been reset successfully."}
+        )}
+    )
     def post(self, request):
-        token = request.data.get("token")
-        new_password = request.data.get("new_password")
-        if not token or not new_password:
-            return Response({"detail": "token and new_password required"}, status=400)
-        user_id = r.get(f"pwdreset:{token}")
+        serializer = ResetPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        token = serializer.validated_data["token"]
+        password = serializer.validated_data["password"]
+        redis_conn = get_redis_connection("default")
+        user_id = redis_conn.get(f"reset:{token}")
         if not user_id:
-            return Response({"detail": "invalid or expired token"}, status=400)
+            return Response({"detail": "Invalid or expired token."}, status=400)
         try:
-            user = User.objects.get(id=int(user_id))
+            user = User.objects.get(pk=int(user_id))
         except User.DoesNotExist:
-            return Response({"detail": "invalid token"}, status=400)
-        user.set_password(new_password)
+            return Response({"detail": "User not found."}, status=404)
+        user.set_password(password)
         user.save()
-        r.delete(f"pwdreset:{token}")
-        return Response({"message": "password reset successful"})
+        redis_conn.delete(f"reset:{token}")
+        return Response({"detail": "Password has been reset successfully."})
