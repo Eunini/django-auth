@@ -11,7 +11,7 @@ env = environ.Env(
     SECRET_KEY=(str, "unsafe"),
     DATABASE_URL=(str, ""),
     REDIS_URL=(str, "redis://localhost:6379/1"),
-    ALLOWED_HOSTS=(str, "127.0.0.1,localhost"),  # comma-separated
+    ALLOWED_HOSTS=(str, "127.0.0.1,localhost"), 
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
