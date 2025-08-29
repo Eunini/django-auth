@@ -1,27 +1,46 @@
 from pathlib import Path
 import environ
 from datetime import timedelta
+import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Setup environment variables
 env = environ.Env(
     DEBUG=(bool, False),
     SECRET_KEY=(str, "unsafe"),
     DATABASE_URL=(str, ""),
     REDIS_URL=(str, "redis://localhost:6379/1"),
+    ALLOWED_HOSTS=(str, "127.0.0.1,localhost"),  # comma-separated
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
+# Core settings
 DEBUG = env.bool("DEBUG")
 SECRET_KEY = env("SECRET_KEY")
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
 
+# Allow hosts from environment or Render's auto hostname
+ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["127.0.0.1", "localhost"])
+render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+if render_host:
+    ALLOWED_HOSTS.append(render_host)
+
+# Applications
 INSTALLED_APPS = [
-    "django.contrib.admin", "django.contrib.auth", "django.contrib.contenttypes",
-    "django.contrib.sessions", "django.contrib.messages", "django.contrib.staticfiles",
-    "rest_framework", "corsheaders", "drf_spectacular",
-    "accounts", "authapi",
+    "django.contrib.admin", 
+    "django.contrib.auth", 
+    "django.contrib.contenttypes",
+    "django.contrib.sessions", 
+    "django.contrib.messages", 
+    "django.contrib.staticfiles",
+    "rest_framework", 
+    "corsheaders", 
+    "drf_spectacular",
+    "accounts", 
+    "authapi",
 ]
 
+# Middleware
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
@@ -33,8 +52,10 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+# URL configuration
 ROOT_URLCONF = "config.urls"
 
+# Templates
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
@@ -51,10 +72,15 @@ TEMPLATES = [
     }
 ]
 
+# WSGI
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {"default": env.db("DATABASE_URL")}
+# Database
+DATABASES = {
+    "default": env.db("DATABASE_URL")
+}
 
+# Caching with Redis
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
@@ -64,8 +90,10 @@ CACHES = {
     }
 }
 
+# Custom user model
 AUTH_USER_MODEL = 'accounts.User'
 
+# Django Rest Framework
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -84,13 +112,24 @@ REST_FRAMEWORK = {
     },
 }
 
+# JWT configuration
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
+# Static files (important for Render deployment)
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Security settings for production
+if not DEBUG:
+    CSRF_TRUSTED_ORIGINS = [f"https://{host}" for host in ALLOWED_HOSTS if host != "localhost"]
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# Default primary key field
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
